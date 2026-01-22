@@ -1,0 +1,573 @@
+---
+title: "Frequentist models"
+author: "Isobel Landray"
+date: "2026-01-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(haven)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+  library(sn)
+library(e1071)
+library(MASS)
+```
+
+
+```{r}
+DF_2022<-readRDS("Output/Jan21/BMIDF_2022.rds")
+```
+
+
+```{r}
+#do for each row
+row<-DF_2022 %>% filter(name=="Albania" & SEX==0 & heightagegroups=="18-29")
+
+
+#for the middle categories, simulate uniform distributions
+bmi_values <- c((20+18.5)/2, (25+20)/2, (30+25)/2, (35+30)/2, (40+35)/2)
+weights <- c(row$prev_18.5to20, row$prev_20to25, row$prev_25to30, row$prev_30to35, row$prev_35to40)
+
+DF_2022<-DF_2022 %>% filter(!is.na(heightagegroups))
+
+
+for(i in 1:nrow(DF_2022)){
+  
+  row<-DF_2022[i,]
+
+  # Extract prevalences
+  p <- c(
+    row$prev_less18.5,
+    row$prev_18.5to20,
+    row$prev_20to25,
+    row$prev_25to30,
+    row$prev_30to35,
+    row$prev_35to40,
+    row$prev_over40
+  )
+  
+  # Normalize in case they don't sum to 1
+  p <- p / sum(p)
+  
+  # Number of individuals per category
+  n_cat <- round(p * 100000)
+  
+  # 1. <18.5 (negative binomial)
+  bmi_less18.5 <- rnbinom(n_cat[1], size = 10, mu = 17)  # mean around 17
+  bmi_less18.5 <- pmin(bmi_less18.5, 18.4)               # cap at 18.5
+  bmi_less18.5 <- pmax(bmi_less18.5, 10)      # make bmi at least 10
+  
+  # 2. Uniform middle categories
+  bmi_18.5to20 <- runif(n_cat[2], 18.5, 20)
+  bmi_20to25   <- runif(n_cat[3], 20, 25)
+  bmi_25to30   <- runif(n_cat[4], 25, 30)
+  bmi_30to35   <- runif(n_cat[5], 30, 35)
+  bmi_35to40   <- runif(n_cat[6], 35, 40)
+  
+  # 3. >40 (negative binomial shifted)
+  bmi_over40 <- rnbinom(n_cat[7], size = 10, mu = 5) + 40  # mean around 45
+  
+  # Combine into one vector
+  synthetic_bmi <- c(
+    bmi_less18.5,
+    bmi_18.5to20,
+    bmi_20to25,
+    bmi_25to30,
+    bmi_30to35,
+    bmi_35to40,
+    bmi_over40
+  )
+  
+  # Skip if synthetic_bmi has problems
+if (length(synthetic_bmi) < 10 ||
+    any(!is.finite(synthetic_bmi)) ||
+    sd(synthetic_bmi) == 0) {
+  
+  DF_2022[i, c("normal_mean","normal_sd",
+               "gamma_alpha","gamma_beta",
+               "lognormal_meanlog","lognormal_sdlog",
+               "skewnorm_xi","skewnorm_omega","skewnorm_alpha")] <- NA
+  next
+
+}
+  
+  fit_normal <- fitdistr(synthetic_bmi, densfun = "normal")
+  DF_2022[i,"normal_mean"] <- fit_normal$estimate["mean"]
+  DF_2022[i,"normal_sd"] <- fit_normal$estimate["sd"]
+  
+  #fit_gamma <- fitdistr(synthetic_bmi, densfun = "gamma")
+  #DF_2022[i,"gamma_alpha"] <- fit_gamma$estimate["shape"]
+  #DF_2022[i,"gamma_beta"] <- 1/fit_gamma$estimate["rate"]
+  
+  fit_lognormal <- fitdistr(synthetic_bmi, densfun = "lognormal")
+  DF_2022[i,"lognormal_meanlog"] <- fit_lognormal$estimate["meanlog"]
+  DF_2022[i,"lognormal_sdlog"] <- fit_lognormal$estimate["sdlog"]
+  
+  gamma1 <- skewness(synthetic_bmi, type=1)
+  delta <- sign(gamma1) * sqrt( (pi/2) * (abs(gamma1))^(2/3) / ( (abs(gamma1))^(2/3) + ((4 - pi)/2)^(2/3) ) )
+  delta <- min(delta, 0.999)
+  alpha <- delta / sqrt(1 - delta^2)
+  m <- mean(synthetic_bmi)
+  s <- sd(synthetic_bmi)
+  omega <- s / sqrt(1 - (2 * delta^2 / pi))
+  xi <- m - omega * delta * sqrt(2 / pi)
+  DF_2022[i, "skewnorm_xi"] <- xi 
+  DF_2022[i, "skewnorm_omega"] <- omega 
+  DF_2022[i, "skewnorm_alpha"] <- alpha
+
+}
+
+saveRDS(DF_2022, file="Output/Jan21/DF_withfrequentistmodelparameters.rds")
+
+```
+
+```{r}
+DF_2022<-readRDS("Output/Jan21/DF_withfrequentistmodelparameters.rds")
+#NORMAL MODEL:
+
+DF_2022$pred_less18.5_normal<-pnorm(18.5,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(10,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_18.5to20_normal<-pnorm(20,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(18.5,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_20to25_normal<-pnorm(25,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(20,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_25to30_normal<-pnorm(30,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(25,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_30to35_normal<-pnorm(35,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(30,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_35to40_normal<-pnorm(40,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(35,DF_2022$normal_mean, DF_2022$normal_sd)
+DF_2022$pred_over40_normal<-pnorm(50,DF_2022$normal_mean, DF_2022$normal_sd)-pnorm(40,DF_2022$normal_mean, DF_2022$normal_sd)
+
+DF_2022$AE_less18.5_normal<-abs(DF_2022$pred_less18.5_normal-DF_2022$prev_less18.5)
+DF_2022$AE_18.5to20_normal<-abs(DF_2022$pred_18.5to20_normal-DF_2022$prev_18.5to20)
+DF_2022$AE_20to25_normal<-abs(DF_2022$pred_20to25_normal-DF_2022$prev_20to25)
+DF_2022$AE_25to30_normal<-abs(DF_2022$pred_25to30_normal-DF_2022$prev_25to30)
+DF_2022$AE_30to35_normal<-abs(DF_2022$pred_30to35_normal-DF_2022$prev_30to35)
+DF_2022$AE_35to40_normal<-abs(DF_2022$pred_35to40_normal-DF_2022$prev_35to40)
+DF_2022$AE_over40_normal<-abs(DF_2022$pred_over40_normal-DF_2022$prev_over40)
+
+DF_2022$SE_less18.5_normal<-DF_2022$AE_less18.5_normal^2
+DF_2022$SE_18.5to20_normal<-DF_2022$AE_18.5to20_normal^2
+DF_2022$SE_20to25_normal<-DF_2022$AE_20to25_normal^2
+DF_2022$SE_25to30_normal<-DF_2022$AE_25to30_normal^2
+DF_2022$SE_30to35_normal<-DF_2022$AE_30to35_normal^2
+DF_2022$SE_35to40_normal<-DF_2022$AE_35to40_normal^2
+DF_2022$SE_over40_normal<-DF_2022$AE_over40_normal^2
+
+DF_2022$MAE_normal<-(DF_2022$AE_less18.5_normal+DF_2022$AE_18.5to20_normal+DF_2022$AE_20to25_normal+DF_2022$AE_25to30_normal+DF_2022$AE_30to35_normal+DF_2022$AE_35to40_normal+DF_2022$AE_over40_normal)/7
+DF_2022$MSE_normal<-(DF_2022$SE_less18.5_normal+DF_2022$SE_18.5to20_normal+DF_2022$SE_20to25_normal+DF_2022$SE_25to30_normal+DF_2022$SE_30to35_normal+DF_2022$SE_35to40_normal+DF_2022$SE_over40_normal)/7
+
+DF_2022 %>% summarise(MAE_normal_overall=mean(MAE_normal), MSE_normal_overall=mean(MSE_normal))
+
+
+#LOG-NORMAL MODEL:
+
+DF_2022$pred_less18.5_lognormal<-plnorm(18.5,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(10,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_18.5to20_lognormal<-plnorm(20,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(18.5,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_20to25_lognormal<-plnorm(25,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(20,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_25to30_lognormal<-plnorm(30,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(25,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_30to35_lognormal<-plnorm(35,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(30,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_35to40_lognormal<-plnorm(40,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(35,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+DF_2022$pred_over40_lognormal<-plnorm(50,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)-plnorm(40,DF_2022$lognormal_meanlog, DF_2022$lognormal_sdlog)
+
+DF_2022$AE_less18.5_lognormal<-abs(DF_2022$pred_less18.5_lognormal-DF_2022$prev_less18.5)
+DF_2022$AE_18.5to20_lognormal<-abs(DF_2022$pred_18.5to20_lognormal-DF_2022$prev_18.5to20)
+DF_2022$AE_20to25_lognormal<-abs(DF_2022$pred_20to25_lognormal-DF_2022$prev_20to25)
+DF_2022$AE_25to30_lognormal<-abs(DF_2022$pred_25to30_lognormal-DF_2022$prev_25to30)
+DF_2022$AE_30to35_lognormal<-abs(DF_2022$pred_30to35_lognormal-DF_2022$prev_30to35)
+DF_2022$AE_35to40_lognormal<-abs(DF_2022$pred_35to40_lognormal-DF_2022$prev_35to40)
+DF_2022$AE_over40_lognormal<-abs(DF_2022$pred_over40_lognormal-DF_2022$prev_over40)
+
+DF_2022$SE_less18.5_lognormal<-DF_2022$AE_less18.5_lognormal^2
+DF_2022$SE_18.5to20_lognormal<-DF_2022$AE_18.5to20_lognormal^2
+DF_2022$SE_20to25_lognormal<-DF_2022$AE_20to25_lognormal^2
+DF_2022$SE_25to30_lognormal<-DF_2022$AE_25to30_lognormal^2
+DF_2022$SE_30to35_lognormal<-DF_2022$AE_30to35_lognormal^2
+DF_2022$SE_35to40_lognormal<-DF_2022$AE_35to40_lognormal^2
+DF_2022$SE_over40_lognormal<-DF_2022$AE_over40_lognormal^2
+
+DF_2022$MAE_lognormal<-(DF_2022$AE_less18.5_lognormal+DF_2022$AE_18.5to20_lognormal+DF_2022$AE_20to25_lognormal+DF_2022$AE_25to30_lognormal+DF_2022$AE_30to35_lognormal+DF_2022$AE_35to40_lognormal+DF_2022$AE_over40_lognormal)/7
+DF_2022$MSE_lognormal<-(DF_2022$SE_less18.5_lognormal+DF_2022$SE_18.5to20_lognormal+DF_2022$SE_20to25_lognormal+DF_2022$SE_25to30_lognormal+DF_2022$SE_30to35_lognormal+DF_2022$SE_35to40_lognormal+DF_2022$SE_over40_lognormal)/7
+
+DF_2022 %>% summarise(MAE_lognormal_overall=mean(MAE_lognormal), MSE_lognormal_overall=mean(MSE_lognormal))
+
+# SKEW-NORMAL
+
+DF_2022$pred_less18.5_skewnormal<-psn(18.5,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(10,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_18.5to20_skewnormal<-psn(20,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(18.5,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_20to25_skewnormal<-psn(25,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(20,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_25to30_skewnormal<-psn(30,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(25,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_30to35_skewnormal<-psn(35,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(30,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_35to40_skewnormal<-psn(40,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(35,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+DF_2022$pred_over40_skewnormal<-psn(50,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)-psn(40,DF_2022$skewnorm_xi, DF_2022$skewnorm_omega,DF_2022$skewnorm_alpha)
+
+DF_2022$AE_less18.5_skewnormal<-abs(DF_2022$pred_less18.5_skewnormal-DF_2022$prev_less18.5)
+DF_2022$AE_18.5to20_skewnormal<-abs(DF_2022$pred_18.5to20_skewnormal-DF_2022$prev_18.5to20)
+DF_2022$AE_20to25_skewnormal<-abs(DF_2022$pred_20to25_skewnormal-DF_2022$prev_20to25)
+DF_2022$AE_25to30_skewnormal<-abs(DF_2022$pred_25to30_skewnormal-DF_2022$prev_25to30)
+DF_2022$AE_30to35_skewnormal<-abs(DF_2022$pred_30to35_skewnormal-DF_2022$prev_30to35)
+DF_2022$AE_35to40_skewnormal<-abs(DF_2022$pred_35to40_skewnormal-DF_2022$prev_35to40)
+DF_2022$AE_over40_skewnormal<-abs(DF_2022$pred_over40_skewnormal-DF_2022$prev_over40)
+
+DF_2022$SE_less18.5_skewnormal<-DF_2022$AE_less18.5_skewnormal^2
+DF_2022$SE_18.5to20_skewnormal<-DF_2022$AE_18.5to20_skewnormal^2
+DF_2022$SE_20to25_skewnormal<-DF_2022$AE_20to25_skewnormal^2
+DF_2022$SE_25to30_skewnormal<-DF_2022$AE_25to30_skewnormal^2
+DF_2022$SE_30to35_skewnormal<-DF_2022$AE_30to35_skewnormal^2
+DF_2022$SE_35to40_skewnormal<-DF_2022$AE_35to40_skewnormal^2
+DF_2022$SE_over40_skewnormal<-DF_2022$AE_over40_skewnormal^2
+
+DF_2022$MAE_skewnormal<-(DF_2022$AE_less18.5_skewnormal+DF_2022$AE_18.5to20_skewnormal+DF_2022$AE_20to25_skewnormal+DF_2022$AE_25to30_skewnormal+DF_2022$AE_30to35_skewnormal+DF_2022$AE_35to40_skewnormal+DF_2022$AE_over40_skewnormal)/7
+DF_2022$MSE_skewnormal<-(DF_2022$SE_less18.5_skewnormal+DF_2022$SE_18.5to20_skewnormal+DF_2022$SE_20to25_skewnormal+DF_2022$SE_25to30_skewnormal+DF_2022$SE_30to35_skewnormal+DF_2022$SE_35to40_skewnormal+DF_2022$SE_over40_skewnormal)/7
+
+DF_2022 %>% summarise(MAE_skewnormal_overall=mean(MAE_skewnormal), MSE_skewnormal_overall=mean(MSE_skewnormal))
+
+```
+
+```{r}
+saveRDS(DF_2022, "Output/Jan21/Frequentist_results.rds")
+```
+
+
+Calibration plots:
+
+```{r}
+#NORMAL MODEL
+print("<18.5")
+cal_model_normal_1 <- lm(pred_less18.5_normal ~ prev_less18.5,data=DF_2022)
+coef(cal_model_normal_1)
+confint(cal_model_normal_1)
+print("18.5 to 20")
+cal_model_normal_2 <- lm(pred_18.5to20_normal ~ prev_18.5to20,data=DF_2022)
+coef(cal_model_normal_2)
+confint(cal_model_normal_2)
+print("20 to 25")
+cal_model_normal_3 <- lm(pred_20to25_normal ~ prev_20to25,data=DF_2022)
+coef(cal_model_normal_3)
+confint(cal_model_normal_3)
+print("25 to 30")
+cal_model_normal_4 <- lm(pred_25to30_normal ~ prev_25to30,data=DF_2022)
+coef(cal_model_normal_4)
+confint(cal_model_normal_4)
+print("30 to 35")
+cal_model_normal_5 <- lm(pred_30to35_normal ~ prev_30to35,data=DF_2022)
+coef(cal_model_normal_5)
+confint(cal_model_normal_5)
+print("35 to 40")
+cal_model_normal_6 <- lm(pred_35to40_normal ~ prev_35to40,data=DF_2022)
+coef(cal_model_normal_6)
+confint(cal_model_normal_6)
+print("over 40")
+cal_model_normal_7 <- lm(pred_over40_normal ~ prev_over40,data=DF_2022)
+coef(cal_model_normal_7)
+confint(cal_model_normal_7)
+
+p_normal<-ggplot(data=DF_2022) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_normal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_normal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_normal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_normal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_normal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_normal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_normal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none") + ggtitle("A) Normal model")+xlim(c(0,0.7))+ylim(c(0,0.7))
+p_normal
+```
+
+```{r}
+#LOG-NORMAL MODEL
+print("<18.5")
+cal_model_lognormal_1 <- lm(pred_less18.5_lognormal ~ prev_less18.5,data=DF_2022)
+coef(cal_model_lognormal_1)
+confint(cal_model_lognormal_1)
+print("18.5 to 20")
+cal_model_lognormal_2 <- lm(pred_18.5to20_lognormal ~ prev_18.5to20,data=DF_2022)
+coef(cal_model_lognormal_2)
+confint(cal_model_lognormal_2)
+print("20 to 25")
+cal_model_lognormal_3 <- lm(pred_20to25_lognormal ~ prev_20to25,data=DF_2022)
+coef(cal_model_lognormal_3)
+confint(cal_model_lognormal_3)
+print("25 to 30")
+cal_model_lognormal_4 <- lm(pred_25to30_lognormal ~ prev_25to30,data=DF_2022)
+coef(cal_model_lognormal_4)
+confint(cal_model_lognormal_4)
+print("30 to 35")
+cal_model_lognormal_5 <- lm(pred_30to35_lognormal ~ prev_30to35,data=DF_2022)
+coef(cal_model_lognormal_5)
+confint(cal_model_lognormal_5)
+print("35 to 40")
+cal_model_lognormal_6 <- lm(pred_35to40_lognormal ~ prev_35to40,data=DF_2022)
+coef(cal_model_lognormal_6)
+confint(cal_model_lognormal_6)
+print("over 40")
+cal_model_lognormal_7 <- lm(pred_over40_lognormal ~ prev_over40,data=DF_2022)
+coef(cal_model_lognormal_7)
+confint(cal_model_lognormal_7)
+
+
+p_lognormal<-ggplot(data=DF_2022) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_lognormal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_lognormal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_lognormal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_lognormal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_lognormal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_lognormal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_lognormal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none")+ggtitle("B) Log-normal model")+xlim(c(0,0.7))+ylim(c(0,0.7))
+p_lognormal   
+```
+
+
+
+
+```{r}
+#SKEW-NORMAL MODEL
+print("<18.5")
+cal_model_skewnormal_1 <- lm(pred_less18.5_skewnormal ~ prev_less18.5,data=DF_2022)
+coef(cal_model_skewnormal_1)
+confint(cal_model_skewnormal_1)
+print("18.5 to 20")
+cal_model_skewnormal_2 <- lm(pred_18.5to20_skewnormal ~ prev_18.5to20,data=DF_2022)
+coef(cal_model_skewnormal_2)
+confint(cal_model_skewnormal_2)
+print("20 to 25")
+cal_model_skewnormal_3 <- lm(pred_20to25_skewnormal ~ prev_20to25,data=DF_2022)
+coef(cal_model_skewnormal_3)
+confint(cal_model_skewnormal_3)
+print("25 to 30")
+cal_model_skewnormal_4 <- lm(pred_25to30_skewnormal ~ prev_25to30,data=DF_2022)
+coef(cal_model_skewnormal_4)
+confint(cal_model_skewnormal_4)
+print("30 to 35")
+cal_model_skewnormal_5 <- lm(pred_30to35_skewnormal ~ prev_30to35,data=DF_2022)
+coef(cal_model_skewnormal_5)
+confint(cal_model_skewnormal_5)
+print("35 to 40")
+cal_model_skewnormal_6 <- lm(pred_35to40_skewnormal ~ prev_35to40,data=DF_2022)
+coef(cal_model_skewnormal_6)
+confint(cal_model_skewnormal_6)
+print("over 40")
+cal_model_skewnormal_7 <- lm(pred_over40_skewnormal ~ prev_over40,data=DF_2022)
+coef(cal_model_skewnormal_7)
+confint(cal_model_skewnormal_7)
+
+
+p_skewnormal<-ggplot(data=DF_2022) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_skewnormal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_skewnormal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_skewnormal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_skewnormal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_skewnormal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_skewnormal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_skewnormal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+ggtitle("C) Skew-normal model")+xlim(c(0,0.7))+ylim(c(0,0.7))
+p_skewnormal
+                      
+```
+
+```{r}
+library(patchwork)
+calibration_plots_frequentist<-p_normal + p_lognormal + p_skewnormal
+
+ggsave(
+  filename = "Output/Jan21/calibration_plots_frequentist.png",
+  plot = calibration_plots_frequentist,
+  width = 12,
+  height = 4,
+  dpi = 300
+)
+
+```
+
+
+MAKE A DATASET FOR MSD FOR HEATMAPS:
+```{r}
+DF_2022_MSE_AGESEX<-DF_2022 %>% group_by(heightagegroups, SEX) %>% summarise(N=n(), SE_less18.5_normal_MEANAGESEX = mean(SE_less18.5_normal), SE_18.5to20_normal_MEANAGESEX = mean(SE_18.5to20_normal), SE_20to25_normal_MEANAGESEX = mean(SE_20to25_normal), SE_25to30_normal_MEANAGESEX = mean(SE_25to30_normal), SE_30to35_normal_MEANAGESEX = mean(SE_30to35_normal), SE_35to40_normal_MEANAGESEX = mean(SE_35to40_normal), SE_over40_normal_MEANAGESEX = mean(SE_over40_normal), SE_less18.5_lognormal_MEANAGESEX = mean(SE_less18.5_lognormal), SE_18.5to20_lognormal_MEANAGESEX = mean(SE_18.5to20_lognormal), SE_20to25_lognormal_MEANAGESEX = mean(SE_20to25_lognormal), SE_25to30_lognormal_MEANAGESEX = mean(SE_25to30_lognormal), SE_30to35_lognormal_MEANAGESEX = mean(SE_30to35_lognormal), SE_35to40_lognormal_MEANAGESEX = mean(SE_35to40_lognormal), SE_over40_lognormal_MEANAGESEX = mean(SE_over40_lognormal), SE_less18.5_skewnormal_MEANAGESEX = mean(SE_less18.5_skewnormal), SE_18.5to20_skewnormal_MEANAGESEX = mean(SE_18.5to20_skewnormal), SE_20to25_skewnormal_MEANAGESEX = mean(SE_20to25_skewnormal), SE_25to30_skewnormal_MEANAGESEX = mean(SE_25to30_skewnormal), SE_30to35_skewnormal_MEANAGESEX = mean(SE_30to35_skewnormal), SE_35to40_skewnormal_MEANAGESEX = mean(SE_35to40_skewnormal), SE_over40_skewnormal_MEANAGESEX = mean(SE_over40_skewnormal))
+
+DF_2022_MSE_AGESEX$SE_normal <- (DF_2022_MSE_AGESEX$SE_less18.5_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_18.5to20_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_20to25_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_25to30_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_30to35_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_35to40_normal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_over40_normal_MEANAGESEX)/7
+
+DF_2022_MSE_AGESEX$SE_lognormal <- (DF_2022_MSE_AGESEX$SE_less18.5_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_18.5to20_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_20to25_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_25to30_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_30to35_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_35to40_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_over40_lognormal_MEANAGESEX)/7
+
+DF_2022_MSE_AGESEX$SE_skewnormal <- (DF_2022_MSE_AGESEX$SE_less18.5_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_18.5to20_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_20to25_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_25to30_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_30to35_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_35to40_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX$SE_over40_skewnormal_MEANAGESEX)/7
+
+
+DF_2022_MSE_AGESEX_long <- DF_2022_MSE_AGESEX %>%
+  dplyr::select(heightagegroups, SEX, SE_normal, SE_lognormal, SE_skewnormal) %>%
+  pivot_longer(
+    cols = c(SE_normal, SE_lognormal, SE_skewnormal),
+    names_to = "distribution",
+    values_to = "SE"
+  ) %>%
+  mutate(
+    distribution = recode(distribution,
+                          SE_normal = "A) Normal model",
+                          SE_lognormal = "B) Log-normal model",
+                          SE_skewnormal = "C) Skew-normal model")
+  )
+
+DF_2022_MSE_AGESEX_long$SEX <- factor(
+  DF_2022_MSE_AGESEX_long$SEX,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+heatmap_agesex<-ggplot(DF_2022_MSE_AGESEX_long,
+       aes(x = heightagegroups,
+           y = SEX,
+           fill = SE)) +
+  facet_wrap(~distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex.png",
+  plot = heatmap_agesex,
+  width = 12,
+  height = 4,
+  dpi = 300
+)
+
+```
+
+
+HEATMAPS BY WORLD REGION:
+```{r}
+ DF_2022_MSE_AGESEX_WORLDREGION<-DF_2022 %>% group_by(heightagegroups, SEX, region.y) %>% summarise(N=n(), SE_less18.5_normal_MEANAGESEX = mean(SE_less18.5_normal), SE_18.5to20_normal_MEANAGESEX = mean(SE_18.5to20_normal), SE_20to25_normal_MEANAGESEX = mean(SE_20to25_normal), SE_25to30_normal_MEANAGESEX = mean(SE_25to30_normal), SE_30to35_normal_MEANAGESEX = mean(SE_30to35_normal), SE_35to40_normal_MEANAGESEX = mean(SE_35to40_normal), SE_over40_normal_MEANAGESEX = mean(SE_over40_normal), SE_less18.5_lognormal_MEANAGESEX = mean(SE_less18.5_lognormal), SE_18.5to20_lognormal_MEANAGESEX = mean(SE_18.5to20_lognormal), SE_20to25_lognormal_MEANAGESEX = mean(SE_20to25_lognormal), SE_25to30_lognormal_MEANAGESEX = mean(SE_25to30_lognormal), SE_30to35_lognormal_MEANAGESEX = mean(SE_30to35_lognormal), SE_35to40_lognormal_MEANAGESEX = mean(SE_35to40_lognormal), SE_over40_lognormal_MEANAGESEX = mean(SE_over40_lognormal), SE_less18.5_skewnormal_MEANAGESEX = mean(SE_less18.5_skewnormal), SE_18.5to20_skewnormal_MEANAGESEX = mean(SE_18.5to20_skewnormal), SE_20to25_skewnormal_MEANAGESEX = mean(SE_20to25_skewnormal), SE_25to30_skewnormal_MEANAGESEX = mean(SE_25to30_skewnormal), SE_30to35_skewnormal_MEANAGESEX = mean(SE_30to35_skewnormal), SE_35to40_skewnormal_MEANAGESEX = mean(SE_35to40_skewnormal), SE_over40_skewnormal_MEANAGESEX = mean(SE_over40_skewnormal))
+
+DF_2022_MSE_AGESEX_WORLDREGION$SE_normal <- (DF_2022_MSE_AGESEX_WORLDREGION$SE_less18.5_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_18.5to20_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_20to25_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_25to30_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_30to35_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_35to40_normal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_over40_normal_MEANAGESEX)/7
+
+DF_2022_MSE_AGESEX_WORLDREGION$SE_lognormal <- (DF_2022_MSE_AGESEX_WORLDREGION$SE_less18.5_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_18.5to20_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_20to25_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_25to30_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_30to35_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_35to40_lognormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_over40_lognormal_MEANAGESEX)/7
+
+DF_2022_MSE_AGESEX_WORLDREGION$SE_skewnormal <- (DF_2022_MSE_AGESEX_WORLDREGION$SE_less18.5_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_18.5to20_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_20to25_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_25to30_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_30to35_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_35to40_skewnormal_MEANAGESEX + DF_2022_MSE_AGESEX_WORLDREGION$SE_over40_skewnormal_MEANAGESEX)/7
+
+
+DF_2022_MSE_AGESEX_WORLDREGION_long <- DF_2022_MSE_AGESEX_WORLDREGION %>%
+  dplyr::select(heightagegroups, SEX, region.y, SE_normal, SE_lognormal, SE_skewnormal) %>%
+  pivot_longer(
+    cols = c(SE_normal, SE_lognormal, SE_skewnormal),
+    names_to = "distribution",
+    values_to = "SE"
+  ) %>%
+  mutate(
+    distribution = recode(distribution,
+                          SE_normal = "A) Normal model",
+                          SE_lognormal = "B) Log-normal model",
+                          SE_skewnormal = "C) Skew-normal model")
+  )
+
+DF_2022_MSE_AGESEX_WORLDREGION_long$SEX <- factor(
+  DF_2022_MSE_AGESEX_WORLDREGION_long$SEX,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+
+heatmap_agesex_region<-ggplot(DF_2022_MSE_AGESEX_WORLDREGION_long,
+       aes(x = heightagegroups,
+           y = SEX,
+           fill = SE)) +
+  facet_grid(region.y ~ distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_region.png",
+  plot = heatmap_agesex_region,
+  width = 12,
+  height = 15,
+  dpi = 300
+)
+```
+
+
+FOR EACH MSD: 
+
+```{r}
+
+DF_2022_MSE_AGESEX_long_separate <- DF_2022_MSE_AGESEX %>%
+  dplyr::select(heightagegroups, SEX, SE_less18.5_normal_MEANAGESEX:SE_over40_skewnormal_MEANAGESEX) %>%
+  pivot_longer( cols = starts_with("SE_"), names_to = c("BMI_category", "distribution"), names_pattern = "SE_(.*)_(.*)_MEANAGESEX", values_to = "SE" ) %>% mutate(BMI_category = recode(BMI_category, "less18.5" = "<18.5", "18.5to20" = "18.5-20", "20to25" = "20-25", "25to30" = "25-30", "30to35" = "30-35", "35to40" = "35-40", "over40" = ">40"), BMI_category = factor( BMI_category, levels = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40", ">40") ) )
+
+DF_2022_MSE_AGESEX_long_separate <- DF_2022_MSE_AGESEX_long_separate %>% mutate(distribution = recode(distribution, normal = "A) Normal model", lognormal = "B) Log-normal model", skewnormal = "C) Skew-normal model"))
+
+
+DF_2022_MSE_AGESEX_long_separate$SEX <- factor(
+  DF_2022_MSE_AGESEX_long_separate$SEX,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+heatmap_agesex_separate<-ggplot(DF_2022_MSE_AGESEX_long_separate,
+       aes(x = heightagegroups,
+           y = SEX,
+           fill = SE)) +
+  facet_grid(BMI_category~distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_separate.png",
+  plot = heatmap_agesex_separate,
+  width = 12,
+  height = 15,
+  dpi = 300
+)
+```
+
+
+OUTPUT DATA:
+
+```{r}
+saveRDS(DF_2022_MSE_AGESEX_long, "Output/Jan21/data4heatmap_agesex_frequentist.rds")
+
+saveRDS(DF_2022_MSE_AGESEX_WORLDREGION_long, "Output/Jan21/data4heatmap_agesexregion_frequentist.rds")
+
+saveRDS(DF_2022_MSE_AGESEX_long_separate, "Output/Jan21/data4heatmap_agesexbmicat_frequentist.rds")
+```
+
+
+
+
+
+
+

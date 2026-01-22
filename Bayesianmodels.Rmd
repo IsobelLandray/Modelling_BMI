@@ -1,0 +1,578 @@
+---
+title: "Bayesian models"
+author: "Isobel Landray"
+date: "2026-01-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Bayesian models - normal and split-normals:
+
+```{r}
+library(rstan)
+library(tidyverse)
+library(splines)
+library(cowplot)
+library(sn)
+library(e1071)
+```
+
+```{r}
+###################################
+#DO IN LOOP TO RECORD FOR ALL GROUPS:
+DF<-readRDS("Output/Jan21/BMIDF_2022.rds")
+DF_ADULT_noNA<-DF %>% filter(!is.na(`prev_less18.5`))
+
+bin_edges <- c(10, 18.5, 20, 25, 30, 35, 40, 50)
+
+results <- data.frame(
+  index = integer(),
+  name = character(),
+  sex = character(),
+  agegroup = character(),      
+  prev_less18.5 = numeric(),
+      prev_18.5to20 = numeric(),
+      prev_20to25 = numeric(),
+      prev_25to30 = numeric(),
+      prev_30to35 = numeric(),
+      prev_35to40 = numeric(),
+      prev_over40 = numeric(),
+  sigma1 = numeric(),
+  sigma2 = numeric(),
+  pivot = numeric(),
+  total_abs_diff_bayes = numeric(),
+  total_abs_diff_skew = numeric(),
+  stringsAsFactors = FALSE,      
+  p_hn_less18.5 = numeric(),
+      p_hn_18.5to20 = numeric(),
+      p_hn_20to25 = numeric(),
+      p_hn_25to30 = numeric(),
+      p_hn_30to35 = numeric(),
+      p_hn_35to40 = numeric(),
+      p_hn_over40 = numeric(),
+   p_n_less18.5 = numeric(),
+      p_n_18.5to20 = numeric(),
+      p_n_20to25 = numeric(),
+      p_n_25to30 = numeric(),
+      p_n_30to35 = numeric(),
+      p_n_35to40 = numeric(),
+      p_n_over40 = numeric()
+  
+)
+
+for (i in 1:nrow(DF_ADULT_noNA)) {
+  
+  # Observed proportions
+  proportions <- c(
+    DF_ADULT_noNA[i, "prev_less18.5"][[1]],
+    DF_ADULT_noNA[i, "prev_18.5to20"][[1]],
+    DF_ADULT_noNA[i, "prev_20to25"][[1]],
+    DF_ADULT_noNA[i, "prev_25to30"][[1]],
+    DF_ADULT_noNA[i, "prev_30to35"][[1]],
+    DF_ADULT_noNA[i, "prev_35to40"][[1]],
+    DF_ADULT_noNA[i, "prev_over40"][[1]]
+  )
+  
+  # Skip if missing data
+  if (any(is.na(proportions))) next
+  
+  # Bin structure
+  bmi_bins <- data.frame(
+    mid = c((18.5 + 10) / 2, 19.25, 22.5, 27.5, 32.5, 37.5, 45),
+    width = c(8.5, 1.5, 5, 5, 5, 5, 10),
+    prevalence = proportions
+  )
+  
+  bmi_bins$density <- bmi_bins$prevalence / bmi_bins$width
+  sorted_indices <- order(bmi_bins$density, decreasing = TRUE)
+  max_index <- sorted_indices[1]
+  second_max_index <- sorted_indices[2]
+  
+  # Find index of highest-density bin
+  max_index <- which.max(bmi_bins$density)
+  
+  highest_density_bin_lower <- bmi_bins[max_index,]$mid-bmi_bins[max_index,]$width/2
+  highest_density_bin_upper <- bmi_bins[max_index,]$mid+bmi_bins[max_index,]$width/2
+  midpoint_density<-bmi_bins[max_index,]$mid
+  
+  # Convert to counts
+  N <- 100000
+  y <- round(proportions * N)
+  
+  stan_data <- list(
+    K = length(y),
+    y = y,
+    N = N,
+    bin_edges = bin_edges,
+    pivot_prior1=highest_density_bin_lower,
+    pivot_prior2=highest_density_bin_upper
+  )
+  
+  # Fit Bayesian two-half-normal model
+  fit_n <- tryCatch({
+    stan(
+      file = "Bayesianmodel_HALFnormals.stan",
+      data = stan_data,
+      iter = 4000,
+      chains = 4,
+      seed = 123,
+      refresh = 0,
+      control = list(adapt_delta = 0.99, max_treedepth = 15)
+    )
+  }, error = function(e) {
+    cat("Skipping index", i, "- half-normal model failed:", conditionMessage(e), "\n")
+    return(structure(NULL, class = "try-error"))
+  })
+  
+  if (inherits(fit_n, "try-error")) next
+  
+  
+  posterior <- rstan::extract(fit_n)
+  
+  # Posterior means of parameters
+  sigma1_fit <- mean(posterior$sigma1)
+  sigma2_fit <- mean(posterior$sigma2)
+  pivot_fit <- mean(posterior$pivot)
+  summary_fit <- summary(fit_n)$summary
+  rhat_sigma1 <- summary_fit["sigma1", "Rhat"]
+  rhat_sigma2 <- summary_fit["sigma2", "Rhat"]
+  rhat_pivot  <- summary_fit["pivot", "Rhat"]
+  p_fit_halfnormals <- colMeans(posterior$p)
+  
+  
+  #NORMAL (for comparison - of two half normal vs normal)
+  stan_data_normal <- list(
+    K = length(y),
+    y = y,
+    N = N,
+    bin_edges = bin_edges,
+    mean_prior=midpoint_density
+  )
+  
+  fit_n_normal <- tryCatch({
+    stan(
+      file = "Bayesianmodel_Normal.stan",
+      data = stan_data_normal,
+      iter = 4000,
+      chains = 4,
+      seed = 123,
+      refresh = 0,
+      control = list(adapt_delta = 0.99, max_treedepth = 15)
+    )
+  }, error = function(e) {
+    cat("Skipping index", i, "- normal model failed:", conditionMessage(e), "\n")
+    return(structure(NULL, class = "try-error"))
+  })
+  
+  if (inherits(fit_n_normal, "try-error")) next
+  
+  
+  posterior_normal <- rstan::extract(fit_n_normal)
+  sigma_fit_normal <- mean(posterior_normal$sigma)
+  mu_fit_normal <- mean(posterior_normal$mu)
+  summary_fit_normal <- summary(fit_n_normal)$summary
+  rhat_sigma_normal <- summary_fit_normal["sigma", "Rhat"]
+  rhat_mu_normal <- summary_fit_normal["mu", "Rhat"]
+  p_fit_normal <- colMeans(posterior_normal$p)
+
+  # Store results
+  results <- rbind(
+    results,
+    data.frame(
+      index = i,
+      name = DF_ADULT_noNA[i, "name"][[1]],
+      sex = DF_ADULT_noNA[i, "SEX"][[1]],
+      agegroup = DF_ADULT_noNA[i, "heightagegroups"][[1]],
+      prev_less18.5 = proportions[1],
+      prev_18.5to20 = proportions[2],
+      prev_20to25 = proportions[3],
+      prev_25to30 = proportions[4],
+      prev_30to35 = proportions[5],
+      prev_35to40 = proportions[6],
+      prev_over40 = proportions[7],
+      sigma1 = sigma1_fit,
+      sigma2 = sigma2_fit,
+      pivot = pivot_fit,
+      p_hn_less18.5 = p_fit_halfnormals[1],
+      p_hn_18.5to20 = p_fit_halfnormals[2],
+      p_hn_20to25 = p_fit_halfnormals[3],
+      p_hn_25to30 = p_fit_halfnormals[4],
+      p_hn_30to35 = p_fit_halfnormals[5],
+      p_hn_35to40 = p_fit_halfnormals[6],
+      p_hn_over40 = p_fit_halfnormals[7],
+      rhat_pivot = rhat_pivot,
+      rhat_sigma1 = rhat_sigma1,
+      rhat_sigma2 = rhat_sigma2, 
+      sigma_normal = sigma_fit_normal,
+      mu_normal = mu_fit_normal,
+      p_n_less18.5 = p_fit_normal[1],
+      p_n_18.5to20 = p_fit_normal[2],
+      p_n_20to25 = p_fit_normal[3],
+      p_n_25to30 = p_fit_normal[4],
+      p_n_30to35 = p_fit_normal[5],
+      p_n_35to40 = p_fit_normal[6],
+      p_n_over40 = p_fit_normal[7],
+      rhat_sigma_normal = rhat_sigma_normal,
+      rhat_mu_normal = rhat_mu_normal
+    )
+  )
+  
+  cat("Finished:", i, "of", nrow(DF_ADULT_noNA), "\n")
+}
+
+#results_upto2201<-results I have already run up to row 2201 so have changed the forloop to be just from 2202 so run this but change the code after so when I look back I'm not confused
+#results_upto4971<-bind_rows(results_upto2201,results)
+#results_upto5008<-bind_rows(results_upto4971,results)
+#results_upto5084<-bind_rows(results_upto5008,results)
+#results_upto5764<-bind_rows(results_upto5084,results)
+#results_upto5892<-bind_rows(results_upto5764,results)
+#results_all<-bind_rows(results_upto5892,results)
+
+saveRDS(results,"Output/Jan21/DF_withbayesianparameters.rds")
+
+```
+
+```{r}
+results<-readRDS("Output/Jan21/DF_withbayesianparameters.rds")
+#BAYESIAN NORMAL MODEL:
+
+results$AE_less18.5_normal_b<-abs(results$p_n_less18.5-results$prev_less18.5)
+results$AE_18.5to20_normal_b<-abs(results$p_n_18.5to20-results$prev_18.5to20)
+results$AE_20to25_normal_b<-abs(results$p_n_20to25-results$prev_20to25)
+results$AE_25to30_normal_b<-abs(results$p_n_25to30-results$prev_25to30)
+results$AE_30to35_normal_b<-abs(results$p_n_30to35-results$prev_30to35)
+results$AE_35to40_normal_b<-abs(results$p_n_35to40-results$prev_35to40)
+results$AE_over40_normal_b<-abs(results$p_n_over40-results$prev_over40)
+
+results$SE_less18.5_normal_b<-results$AE_less18.5_normal_b^2
+results$SE_18.5to20_normal_b<-results$AE_18.5to20_normal_b^2
+results$SE_20to25_normal_b<-results$AE_20to25_normal_b^2
+results$SE_25to30_normal_b<-results$AE_25to30_normal_b^2
+results$SE_30to35_normal_b<-results$AE_30to35_normal_b^2
+results$SE_35to40_normal_b<-results$AE_35to40_normal_b^2
+results$SE_over40_normal_b<-results$AE_over40_normal_b^2
+
+results$MAE_normal_b<-(results$AE_less18.5_normal_b+results$AE_18.5to20_normal_b+results$AE_20to25_normal_b+results$AE_25to30_normal_b+results$AE_30to35_normal_b+results$AE_35to40_normal_b+results$AE_over40_normal_b)/7
+results$MSE_normal_b<-(results$SE_less18.5_normal_b+results$SE_18.5to20_normal_b+results$SE_20to25_normal_b+results$SE_25to30_normal_b+results$SE_30to35_normal_b+results$SE_35to40_normal_b+results$SE_over40_normal_b)/7
+
+results %>% summarise(MAE_normal_overall_b=mean(MAE_normal_b), MSE_normal_overall_b=mean(MSE_normal_b))
+
+#BAYESIAN SPLIT-NORMAL MODEL:
+
+results$AE_less18.5_splitnormal_b<-abs(results$p_hn_less18.5-results$prev_less18.5)
+results$AE_18.5to20_splitnormal_b<-abs(results$p_hn_18.5to20-results$prev_18.5to20)
+results$AE_20to25_splitnormal_b<-abs(results$p_hn_20to25-results$prev_20to25)
+results$AE_25to30_splitnormal_b<-abs(results$p_hn_25to30-results$prev_25to30)
+results$AE_30to35_splitnormal_b<-abs(results$p_hn_30to35-results$prev_30to35)
+results$AE_35to40_splitnormal_b<-abs(results$p_hn_35to40-results$prev_35to40)
+results$AE_over40_splitnormal_b<-abs(results$p_hn_over40-results$prev_over40)
+
+results$SE_less18.5_splitnormal_b<-results$AE_less18.5_splitnormal_b^2
+results$SE_18.5to20_splitnormal_b<-results$AE_18.5to20_splitnormal_b^2
+results$SE_20to25_splitnormal_b<-results$AE_20to25_splitnormal_b^2
+results$SE_25to30_splitnormal_b<-results$AE_25to30_splitnormal_b^2
+results$SE_30to35_splitnormal_b<-results$AE_30to35_splitnormal_b^2
+results$SE_35to40_splitnormal_b<-results$AE_35to40_splitnormal_b^2
+results$SE_over40_splitnormal_b<-results$AE_over40_splitnormal_b^2
+
+results$MAE_splitnormal_b<-(results$AE_less18.5_splitnormal_b+results$AE_18.5to20_splitnormal_b+results$AE_20to25_splitnormal_b+results$AE_25to30_splitnormal_b+results$AE_30to35_splitnormal_b+results$AE_35to40_splitnormal_b+results$AE_over40_splitnormal_b)/7
+results$MSE_splitnormal_b<-(results$SE_less18.5_splitnormal_b+results$SE_18.5to20_splitnormal_b+results$SE_20to25_splitnormal_b+results$SE_25to30_splitnormal_b+results$SE_30to35_splitnormal_b+results$SE_35to40_splitnormal_b+results$SE_over40_splitnormal_b)/7
+
+results %>% summarise(MAE_splitnormal_overall_b=mean(MAE_splitnormal_b), MSE_splitnormal_overall_b=mean(MSE_splitnormal_b))
+```
+
+```{r}
+saveRDS(results, "Output/Jan21/Bayesian_results.rds")
+```
+
+
+Calibration plots:
+
+```{r}
+#NORMAL MODEL
+print("<18.5")
+cal_model_normal_b_1 <- lm(p_n_less18.5 ~ prev_less18.5,data=results)
+coef(cal_model_normal_b_1)
+confint(cal_model_normal_b_1)
+print("18.5 to 20")
+cal_model_normal_b_2 <- lm(p_n_18.5to20 ~ prev_18.5to20,data=results)
+coef(cal_model_normal_b_2)
+confint(cal_model_normal_b_2)
+print("20 to 25")
+cal_model_normal_b_3 <- lm(p_n_20to25 ~ prev_20to25,data=results)
+coef(cal_model_normal_b_3)
+confint(cal_model_normal_b_3)
+print("25 to 30")
+cal_model_normal_b_4 <- lm(p_n_25to30 ~ prev_25to30,data=results)
+coef(cal_model_normal_b_4)
+confint(cal_model_normal_b_4)
+print("30 to 35")
+cal_model_normal_b_5 <- lm(p_n_30to35 ~ prev_30to35,data=results)
+coef(cal_model_normal_b_5)
+confint(cal_model_normal_b_5)
+print("35 to 40")
+cal_model_normal_b_6 <- lm(p_n_35to40 ~ prev_35to40,data=results)
+coef(cal_model_normal_b_6)
+confint(cal_model_normal_b_6)
+print("over 40")
+cal_model_normal_b_7 <- lm(p_n_over40 ~ prev_over40,data=results)
+coef(cal_model_normal_b_7)
+confint(cal_model_normal_b_7)
+
+p_normal_b<-ggplot(data=results) +
+  geom_smooth(aes(x=prev_less18.5,y=p_n_less18.5, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=p_n_18.5to20, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=p_n_20to25, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=p_n_25to30, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=p_n_30to35,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=p_n_35to40,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=p_n_over40,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none") + ggtitle("A) Normal model")+xlim(c(0,0.7))+ylim(c(0,0.7))
+p_normal_b
+```
+
+
+```{r}
+#SPLIT-NORMAL MODEL
+print("<18.5")
+cal_model_splitnormal_b_1 <- lm(p_hn_less18.5 ~ prev_less18.5,data=results)
+coef(cal_model_splitnormal_b_1)
+confint(cal_model_splitnormal_b_1)
+print("18.5 to 20")
+cal_model_splitnormal_b_2 <- lm(p_hn_18.5to20 ~ prev_18.5to20,data=results)
+coef(cal_model_splitnormal_b_2)
+confint(cal_model_splitnormal_b_2)
+print("20 to 25")
+cal_model_splitnormal_b_3 <- lm(p_hn_20to25 ~ prev_20to25,data=results)
+coef(cal_model_splitnormal_b_3)
+confint(cal_model_splitnormal_b_3)
+print("25 to 30")
+cal_model_splitnormal_b_4 <- lm(p_hn_25to30 ~ prev_25to30,data=results)
+coef(cal_model_splitnormal_b_4)
+confint(cal_model_splitnormal_b_4)
+print("30 to 35")
+cal_model_splitnormal_b_5 <- lm(p_hn_30to35 ~ prev_30to35,data=results)
+coef(cal_model_splitnormal_b_5)
+confint(cal_model_splitnormal_b_5)
+print("35 to 40")
+cal_model_splitnormal_b_6 <- lm(p_hn_35to40 ~ prev_35to40,data=results)
+coef(cal_model_splitnormal_b_6)
+confint(cal_model_splitnormal_b_6)
+print("over 40")
+cal_model_splitnormal_b_7 <- lm(p_hn_over40 ~ prev_over40,data=results)
+coef(cal_model_splitnormal_b_7)
+confint(cal_model_splitnormal_b_7)
+
+p_splitnormal_b<-ggplot(data=results) +
+  geom_smooth(aes(x=prev_less18.5,y=p_hn_less18.5, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=p_hn_18.5to20, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=p_hn_20to25, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=p_hn_25to30, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=p_hn_30to35,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=p_hn_35to40,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=p_hn_over40,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none") + ggtitle("B) Split-normal model")+xlim(c(0,0.7))+ylim(c(0,0.7))
+p_splitnormal_b
+```
+
+```{r}
+library(patchwork)
+calibration_plots_bayesian<-p_normal_b + p_splitnormal_b 
+
+ggsave(
+  filename = "Output/Jan21/calibration_plots_bayesian.png",
+  plot = calibration_plots_bayesian,
+  width = 8,
+  height = 4,
+  dpi = 300
+)
+
+```
+
+MAKE A DATASET FOR MSD FOR HEATMAPS:
+```{r}
+results_MSE_AGESEX_b<-results %>% group_by(agegroup, sex) %>% summarise(N=n(), SE_less18.5_normal_MEANAGESEX_b = mean(SE_less18.5_normal_b), SE_18.5to20_normal_MEANAGESEX_b = mean(SE_18.5to20_normal_b), SE_20to25_normal_MEANAGESEX_b = mean(SE_20to25_normal_b), SE_25to30_normal_MEANAGESEX_b = mean(SE_25to30_normal_b), SE_30to35_normal_MEANAGESEX_b = mean(SE_30to35_normal_b), SE_35to40_normal_MEANAGESEX_b = mean(SE_35to40_normal_b), SE_over40_normal_MEANAGESEX_b = mean(SE_over40_normal_b), SE_less18.5_splitnormal_MEANAGESEX_b = mean(SE_less18.5_splitnormal_b), SE_18.5to20_splitnormal_MEANAGESEX_b = mean(SE_18.5to20_splitnormal_b), SE_20to25_splitnormal_MEANAGESEX_b = mean(SE_20to25_splitnormal_b), SE_25to30_splitnormal_MEANAGESEX_b = mean(SE_25to30_splitnormal_b), SE_30to35_splitnormal_MEANAGESEX_b = mean(SE_30to35_splitnormal_b), SE_35to40_splitnormal_MEANAGESEX_b = mean(SE_35to40_splitnormal_b), SE_over40_splitnormal_MEANAGESEX_b = mean(SE_over40_splitnormal_b))
+
+results_MSE_AGESEX_b$SE_normal_b <- (results_MSE_AGESEX_b$SE_less18.5_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_18.5to20_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_20to25_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_25to30_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_30to35_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_35to40_normal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_over40_normal_MEANAGESEX_b)/7
+
+results_MSE_AGESEX_b$SE_splitnormal_b <- (results_MSE_AGESEX_b$SE_less18.5_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_18.5to20_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_20to25_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_25to30_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_30to35_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_35to40_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_b$SE_over40_splitnormal_MEANAGESEX_b)/7
+
+results_MSE_AGESEX_b_long <- results_MSE_AGESEX_b %>%
+  dplyr::select(agegroup, sex, SE_normal_b, SE_splitnormal_b) %>%
+  pivot_longer(
+    cols = c(SE_normal_b, SE_splitnormal_b),
+    names_to = "distribution",
+    values_to = "SE"
+  ) %>%
+  mutate(
+    distribution = recode(distribution,
+                          SE_normal_b = "A) Normal model",
+                          SE_splitnormal_b = "B) Split-normal model")
+  )
+
+results_MSE_AGESEX_b_long$sex <- factor(
+  results_MSE_AGESEX_b_long$sex,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+heatmap_agesex_bayesian<-ggplot(results_MSE_AGESEX_b_long,
+       aes(x = agegroup,
+           y = sex,
+           fill = SE)) +
+  facet_wrap(~distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )+
+  scale_fill_viridis_c( option = "magma", name = "MSD", limits = c(0, 0.004) )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_bayesian.png",
+  plot = heatmap_agesex_bayesian,
+  width = 12,
+  height = 4,
+  dpi = 300
+)
+
+results_MSE_AGESEX_b_long %>% filter(distribution=="B) Split-normal model") %>% arrange(SE)
+```
+
+HEATMAPS BY AGE-SEX AND WORLD REGION:
+```{r}
+countryregion<-DF_ADULT_noNA %>% dplyr::select(name, region.y) %>% unique()
+
+results_withregions<-full_join(results, countryregion, by="name")
+
+results_MSE_AGESEX_WORLDREGION_b<-results_withregions %>% group_by(agegroup, sex, region.y) %>% summarise(N=n(), SE_less18.5_normal_MEANAGESEX_b = mean(SE_less18.5_normal_b), SE_18.5to20_normal_MEANAGESEX_b = mean(SE_18.5to20_normal_b), SE_20to25_normal_MEANAGESEX_b = mean(SE_20to25_normal_b), SE_25to30_normal_MEANAGESEX_b = mean(SE_25to30_normal_b), SE_30to35_normal_MEANAGESEX_b = mean(SE_30to35_normal_b), SE_35to40_normal_MEANAGESEX_b = mean(SE_35to40_normal_b), SE_over40_normal_MEANAGESEX_b = mean(SE_over40_normal_b), SE_less18.5_splitnormal_MEANAGESEX_b = mean(SE_less18.5_splitnormal_b), SE_18.5to20_splitnormal_MEANAGESEX_b = mean(SE_18.5to20_splitnormal_b), SE_20to25_splitnormal_MEANAGESEX_b = mean(SE_20to25_splitnormal_b), SE_25to30_splitnormal_MEANAGESEX_b = mean(SE_25to30_splitnormal_b), SE_30to35_splitnormal_MEANAGESEX_b = mean(SE_30to35_splitnormal_b), SE_35to40_splitnormal_MEANAGESEX_b = mean(SE_35to40_splitnormal_b), SE_over40_splitnormal_MEANAGESEX_b = mean(SE_over40_splitnormal_b))
+
+results_MSE_AGESEX_WORLDREGION_b$SE_normal_b <- (results_MSE_AGESEX_WORLDREGION_b$SE_less18.5_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_18.5to20_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_20to25_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_25to30_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_30to35_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_35to40_normal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_over40_normal_MEANAGESEX_b)/7
+
+results_MSE_AGESEX_WORLDREGION_b$SE_splitnormal_b <- (results_MSE_AGESEX_WORLDREGION_b$SE_less18.5_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_18.5to20_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_20to25_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_25to30_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_30to35_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_35to40_splitnormal_MEANAGESEX_b + results_MSE_AGESEX_WORLDREGION_b$SE_over40_splitnormal_MEANAGESEX_b)/7
+
+results_MSE_AGESEX_WORLDREGION_b_long <- results_MSE_AGESEX_WORLDREGION_b %>%
+  dplyr::select(agegroup, sex, region.y, SE_normal_b, SE_splitnormal_b) %>%
+  pivot_longer(
+    cols = c(SE_normal_b, SE_splitnormal_b),
+    names_to = "distribution",
+    values_to = "SE"
+  ) %>%
+  mutate(
+    distribution = recode(distribution,
+                          SE_normal_b = "A) Normal model",
+                          SE_splitnormal_b = "B) Split-normal model")
+  )
+
+results_MSE_AGESEX_WORLDREGION_b_long$sex <- factor(
+  results_MSE_AGESEX_WORLDREGION_b_long$sex,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+heatmap_agesex_worldregion_bayesian<-ggplot(results_MSE_AGESEX_WORLDREGION_b_long,
+       aes(x = agegroup,
+           y = sex,
+           fill = SE)) +
+  facet_grid(region.y ~ distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_worldregion_bayesian.png",
+  plot = heatmap_agesex_worldregion_bayesian,
+  width = 12,
+  height = 15,
+  dpi = 300
+)
+
+```
+
+
+
+FOR EACH MSD: 
+
+```{r}
+
+results_MSE_AGESEX_b_long_separate <- results_MSE_AGESEX_b %>%
+  dplyr::select(agegroup, sex, SE_less18.5_normal_MEANAGESEX_b:SE_over40_splitnormal_MEANAGESEX_b) %>%
+  pivot_longer( cols = starts_with("SE_"), names_to = c("BMI_category", "distribution"), names_pattern = "SE_(.*)_(.*)_MEANAGESEX_b", values_to = "SE" ) %>% mutate(BMI_category = recode(BMI_category, "less18.5" = "<18.5", "18.5to20" = "18.5-20", "20to25" = "20-25", "25to30" = "25-30", "30to35" = "30-35", "35to40" = "35-40", "over40" = ">40"), BMI_category = factor( BMI_category, levels = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40", ">40") ) )
+
+results_MSE_AGESEX_b_long_separate <- results_MSE_AGESEX_b_long_separate %>% mutate(distribution = recode(distribution, normal = "A) Normal model", splitnormal = "B) Split-normal model"))
+
+
+results_MSE_AGESEX_b_long_separate$sex <- factor(
+  results_MSE_AGESEX_b_long_separate$sex,
+  levels = c(0, 1),
+  labels = c("Female", "Male") 
+)
+
+
+heatmap_agesex_separate_bayesian<-ggplot(results_MSE_AGESEX_b_long_separate,
+       aes(x = agegroup,
+           y = sex,
+           fill = SE)) +
+  facet_grid(BMI_category~distribution) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_separate_bayesian.png",
+  plot = heatmap_agesex_separate_bayesian,
+  width = 12,
+  height = 15,
+  dpi = 300
+)
+```
+
+OUTPUT DATA:
+
+```{r}
+saveRDS(results_MSE_AGESEX_b_long, "Output/Jan21/data4heatmap_agesex_bayesian.rds")
+
+saveRDS(results_MSE_AGESEX_WORLDREGION_b_long, "Output/Jan21/data4heatmap_agesexregion_bayesian.rds")
+
+saveRDS(results_MSE_AGESEX_b_long_separate, "Output/Jan21/data4heatmap_agesexbmicat_bayesian.rds")
+```
+
+
+
+
+
+
+
+

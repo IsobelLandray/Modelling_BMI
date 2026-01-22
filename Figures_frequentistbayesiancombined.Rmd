@@ -1,0 +1,322 @@
+---
+title: "Figures_frequentistbayesiancombined"
+author: "Isobel Landray"
+date: "2026-01-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(cowplot)
+```
+
+
+LOAD FREQUENTIST MODEL DATA:
+```{r}
+data4heatmap_agesex_frequentist<-readRDS("Output/Jan21/data4heatmap_agesex_frequentist.rds")
+data4heatmap_agesexregion_frequentist<-readRDS("Output/Jan21/data4heatmap_agesexregion_frequentist.rds")
+data4heatmap_agesexbmicat_frequentist<-readRDS("Output/Jan21/data4heatmap_agesexbmicat_frequentist.rds")
+
+data4heatmap_agesex_frequentist2<-data4heatmap_agesex_frequentist%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "A) Frequentist normal",
+                          "B) Log-normal model" = "B) Frequentist log-normal",
+                          "C) Skew-normal model" = "C) Frequentist skew-normal")
+  )
+
+data4heatmap_agesexregion_frequentist2<-data4heatmap_agesexregion_frequentist%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "A) Frequentist normal",
+                          "B) Log-normal model" = "B) Frequentist log-normal",
+                          "C) Skew-normal model" = "C) Frequentist skew-normal")
+  )
+
+data4heatmap_agesexbmicat_frequentist2<-data4heatmap_agesexbmicat_frequentist%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "A) Frequentist normal",
+                          "B) Log-normal model" = "B) Frequentist log-normal",
+                          "C) Skew-normal model" = "C) Frequentist skew-normal")
+  )
+```
+
+LOAD BAYESIAN MODEL DATA:
+```{r}
+data4heatmap_agesex_bayesian<-readRDS("Output/Jan21/data4heatmap_agesex_bayesian.rds")
+data4heatmap_agesexregion_bayesian<-readRDS("Output/Jan21/data4heatmap_agesexregion_bayesian.rds")
+data4heatmap_agesexbmicat_bayesian<-readRDS("Output/Jan21/data4heatmap_agesexbmicat_bayesian.rds")
+
+data4heatmap_agesex_bayesian2<-data4heatmap_agesex_bayesian%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "D) Bayesian normal",
+                          "B) Split-normal model" = "E) Bayesian split-normal")
+  ) %>% rename(SEX = sex, heightagegroups = agegroup)
+
+data4heatmap_agesexregion_bayesian2<-data4heatmap_agesexregion_bayesian%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "D) Bayesian normal",
+                          "B) Split-normal model" = "E) Bayesian split-normal")
+  ) %>% rename(SEX = sex, heightagegroups = agegroup)
+
+data4heatmap_agesexbmicat_bayesian2<-data4heatmap_agesexbmicat_bayesian%>%
+  mutate(
+    distribution = recode(distribution,
+                          "A) Normal model" = "D) Bayesian normal",
+                          "B) Split-normal model" = "E) Bayesian split-normal")
+  ) %>% rename(SEX = sex, heightagegroups = agegroup)
+```
+
+MERGE FREQUENTIST AND BAYESIAN DATA:
+```{r}
+data4heatmap_agesex_comb<-bind_rows(data4heatmap_agesex_frequentist2,data4heatmap_agesex_bayesian2)
+data4heatmap_agesexregion_comb<-bind_rows(data4heatmap_agesexregion_frequentist2,data4heatmap_agesexregion_bayesian2)
+data4heatmap_agesexbmicat_comb<-bind_rows(data4heatmap_agesexbmicat_frequentist2,data4heatmap_agesexbmicat_bayesian2)
+```
+
+
+HEATMAP WITH AGE AND SEX:
+```{r}
+# 1. Build the plot WITHOUT the legend
+heatmap_agesex_comb <- ggplot(data4heatmap_agesex_comb,
+            aes(x = heightagegroups,
+                y = SEX,
+                fill = SE)) +
+  facet_wrap(~distribution, ncol = 3) +   # 3 columns → 3 + 2 layout
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",              # remove legend for now
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    strip.text = element_text(face = "bold"),     # facet titles
+    legend.title = element_text(face = "bold")
+  )
+
+# 2. Extract the legend from a version WITH the legend
+legend_agesex <- cowplot::get_legend(
+  heatmap_agesex_comb + theme(legend.position = "right") + guides(fill = guide_colorbar(direction="horizontal", barwidth=unit(6, "cm"), barheight=unit(0.4, "cm")))
+)
+
+# 3. Insert the legend into the empty facet space
+heatmap_agesex_comb_plot <- heatmap_agesex_comb + inset_element(
+  legend_agesex,
+  left = 0.68,   
+  bottom = 0.05,
+  right = 0.98,
+  top = 0.45
+)
+
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesex_combined.png",
+  plot = heatmap_agesex_comb_plot,
+  width = 12,
+  height = 8,
+  dpi = 300
+)
+
+```
+
+
+HEATMAP WITH AGE AND SEX AND REGION:
+```{r}
+heatmap_agesexregion_comb <- ggplot(data4heatmap_agesexregion_comb,
+            aes(x = heightagegroups,
+                y = SEX,
+                fill = SE)) +
+  facet_grid(region.y ~ distribution) +  
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+    panel.grid = element_blank(),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    strip.text = element_text(face = "bold"),     # facet titles
+    legend.title = element_text(face = "bold")
+  )+guides(fill = guide_colorbar(direction="vertical", barwidth=unit(1, "cm"), barheight=unit(7, "cm")))
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesexregion_combined.png",
+  plot = heatmap_agesexregion_comb,
+  width = 15,
+  height = 12,
+  dpi = 300
+)
+
+data4heatmap_agesexregion_comb %>% filter(distribution=="E) Bayesian split-normal") %>% arrange(SE)
+```
+
+HEATMAP WITH AGE AND SEX AND BMI CAT:
+```{r}
+heatmap_agesexbmicat_comb <- ggplot(data4heatmap_agesexbmicat_comb,
+            aes(x = heightagegroups,
+                y = SEX,
+                fill = SE)) +
+  facet_grid(BMI_category ~ distribution) +  
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "magma", name = "MSD") +
+  labs(
+    x = "Age group (years)",
+    y = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+    panel.grid = element_blank(),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    strip.text = element_text(face = "bold"),     # facet titles
+    legend.title = element_text(face = "bold")
+  )+guides(fill = guide_colorbar(direction="vertical", barwidth=unit(1, "cm"), barheight=unit(7, "cm")))
+
+ggsave(
+  filename = "Output/Jan21/heatmap_agesexbmicat_combined.png",
+  plot = heatmap_agesexbmicat_comb,
+  width = 15,
+  height = 12,
+  dpi = 300
+)
+```
+
+
+CALIBRATION PLOTS:
+```{r}
+Frequentist_results<-readRDS("Output/Jan21/Frequentist_results.rds")
+Bayesian_results<-readRDS("Output/Jan21/Bayesian_results.rds")
+
+p_normal<-ggplot(data=Frequentist_results) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_normal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_normal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_normal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_normal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_normal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_normal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_normal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none") + ggtitle("A) Frequentist normal")+xlim(c(0,0.7))+ylim(c(0,0.7))+theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)
+
+p_lognormal<-ggplot(data=Frequentist_results) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_lognormal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_lognormal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_lognormal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_lognormal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_lognormal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_lognormal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_lognormal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none")+ggtitle("B) Frequentist log-normal")+xlim(c(0,0.7))+ylim(c(0,0.7))+theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)
+
+p_skewnormal<-ggplot(data=Frequentist_results) +
+  geom_smooth(aes(x=prev_less18.5,y=pred_less18.5_skewnormal, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=pred_18.5to20_skewnormal, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=pred_20to25_skewnormal, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=pred_25to30_skewnormal, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=pred_30to35_skewnormal,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=pred_35to40_skewnormal,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=pred_over40_skewnormal,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+ggtitle("C) Frequentist skew-normal")+xlim(c(0,0.7))+ylim(c(0,0.7)) + theme(legend.position="none")+theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)
+
+p_normal_b<-ggplot(data=Bayesian_results) +
+  geom_smooth(aes(x=prev_less18.5,y=p_n_less18.5, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=p_n_18.5to20, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=p_n_20to25, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=p_n_25to30, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=p_n_30to35,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=p_n_35to40,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=p_n_over40,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40"))+theme(legend.position="none") + ggtitle("D) Bayesian normal")+xlim(c(0,0.7))+ylim(c(0,0.7))+theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)
+
+p_splitnormal_b<-ggplot(data=Bayesian_results) +
+  geom_smooth(aes(x=prev_less18.5,y=p_hn_less18.5, color="<18.5"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_18.5to20,y=p_hn_18.5to20, color="18.5-20"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_20to25,y=p_hn_20to25, color="20-25"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_25to30,y=p_hn_25to30, color="25-30"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_30to35,y=p_hn_30to35,color="30-35"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_35to40,y=p_hn_35to40,color="35-40"),se=FALSE,method="lm")+
+  geom_smooth(aes(x=prev_over40,y=p_hn_over40,color=">40"),se=FALSE,method="lm")+
+  geom_abline(slope=1,intercept=0,linetype="dashed",color="black")+theme_bw()+
+  ylab("Predicted prevalence from model")+xlab("Estimated prevalence from NCD-RisC")+
+  scale_color_manual(name = "BMI category", values = c( "<18.5" = "deepskyblue1", "18.5-20" = "darkred", "20-25"= "orange", "25-30" = "deeppink2", "30-35" = "darkolivegreen2", "35-40" = "pink", ">40" = "darkviolet"), breaks = c("<18.5", "18.5-20", "20-25", "25-30", "30-35", "35-40",">40")) + ggtitle("E) Bayesian split-normal")+xlim(c(0,0.7))+ylim(c(0,0.7)) + theme(legend.position="none")+theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)
+
+legend_calibplot <- p_normal + theme(legend.position = "right") +theme(
+  axis.title.x = element_text(face = "bold"),
+  axis.title.y = element_text(face = "bold"),
+  plot.title   = element_text(face = "bold"),
+  strip.text   = element_text(face = "bold"),   
+  legend.title = element_text(face = "bold")
+)+guides( color = guide_legend(keywidth = unit(1.5, "cm"), keyheight = unit(0.8, "cm")) )
+legend_calib <- cowplot::get_legend(legend_calibplot)
+calibration_plots_combined <- 
+  (p_normal | p_lognormal | p_skewnormal) /
+  (p_normal_b | p_splitnormal_b | legend_calib) +
+  plot_layout(heights = c(1, 1))
+calibration_plots_combined
+
+ggsave(
+  filename = "Output/Jan21/calibration_plots_combined.png",
+  plot = calibration_plots_combined,
+  width = 12,
+  height = 8,
+  dpi = 300
+)
+```
+

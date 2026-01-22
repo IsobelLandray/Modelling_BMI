@@ -1,0 +1,323 @@
+---
+title: "NCDRisC dataset cleaning"
+author: "Isobel Landray"
+date: "2026-01-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(haven)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(readr)
+library(data.table)
+library(tibble)
+```
+
+
+BMI (prevalences by category):
+```{r}
+bmi_female_cat <- read_csv("~/OneDrive/Documents/UAH/Weightofnations/Data sources/BMI/CategoricalBMI/NCD_RisC_Lancet_2024_BMI_female_age_specific_country.csv")
+bmi_female_cat_2022 <- bmi_female_cat %>% filter(Year==2022) %>% mutate(sexn=2)
+bmi_female_cat_2022$SEX<-0
+bmi_male_cat <- read_csv("~/OneDrive/Documents/UAH/Weightofnations/Data sources/BMI/CategoricalBMI/NCD_RisC_Lancet_2024_BMI_male_age_specific_country.csv")
+bmi_male_cat_2022 <- bmi_male_cat %>% filter(Year==2022) %>% mutate(sexn=1)
+bmi_male_cat_2022$SEX<-1
+bmi_bothsexes_cat<-rbind(bmi_female_cat_2022,bmi_male_cat_2022)
+bmi_bothsexes_cat %>% distinct(`Country/Region/World`) 
+```
+
+UN regions: 
+```{r}
+UN_regions <- read_csv("~/OneDrive/Documents/UAH/Weightofnations/Code/2012 code and data/UN-regions.csv")
+UN_regions <- UN_regions %>%
+  mutate(code = if_else(name == "Sudan", 729, code)) 
+UN_regions <- UN_regions 
+```
+
+Before merging, check that all names of countries are the same!
+
+```{r}
+#Names of BMI dataset:
+country_lookup <- tribble(
+  ~UN_name,                                ~BMI_name,
+  "Cape Verde",                            "Cabo Verde",
+  "C\x99te d'Ivoire",                         "Cote d'Ivoire",
+  "Czech Republic", "Czechia",
+  "Dem. People's Republic of Korea",       "North Korea",
+  "Democratic Republic of the Congo",      "DR Congo",
+  "Guinea-Bissau",                         "Guinea Bissau",
+  "Iran (Islamic Republic of)",            "Iran",
+  "Lao People's Democratic Republic",      "Lao PDR",
+  "Libyan Arab Jamahiriya",                "Libya",
+  "Micronesia (Fed. States of)",           "Federated States of Micronesia",
+  "Republic of Korea",                     "South Korea",
+  "Republic of Moldova",                   "Moldova",
+  "TFYR Macedonia",                        "North Macedonia",
+  "United Republic of Tanzania",           "Tanzania",
+  "Venezuela (Bolivarian Republic of)",    "Venezuela",
+  "Turkey", "Turkiye",
+  "Swaziland", "Eswatini"
+)
+dfbmi2 <- bmi_bothsexes_cat %>%
+  left_join(country_lookup, by = c("Country/Region/World" = "BMI_name")) %>%
+  mutate(Country = if_else(!is.na(UN_name), UN_name, `Country/Region/World`)) 
+
+```
+
+Add continents to data:
+```{r}
+BMIdf_UNregions<-full_join(UN_regions, dfbmi2, by=c("name"="Country"))
+
+region_map <- tribble(
+  ~country, ~region,
+  "United States of America", "NORTHERN AM.",
+  "Canada", "NORTHERN AM.",
+  "Mexico", "LATIN AM. CARIBBEAN",
+  "Brazil", "LATIN AM. CARIBBEAN",
+  "Argentina", "LATIN AM. CARIBBEAN",
+  "Colombia", "LATIN AM. CARIBBEAN",
+  "Chile", "LATIN AM. CARIBBEAN",
+  "Peru", "LATIN AM. CARIBBEAN",
+  "Venezuela (Bolivarian Republic of)", "LATIN AM. CARIBBEAN",
+  "Bolivia", "LATIN AM. CARIBBEAN",
+  "Ecuador", "LATIN AM. CARIBBEAN",
+  "Uruguay", "LATIN AM. CARIBBEAN",
+  "Paraguay", "LATIN AM. CARIBBEAN",
+  "Panama", "LATIN AM. CARIBBEAN",
+  "Costa Rica", "LATIN AM. CARIBBEAN",
+  "Guatemala", "LATIN AM. CARIBBEAN",
+  "Honduras", "LATIN AM. CARIBBEAN",
+  "El Salvador", "LATIN AM. CARIBBEAN",
+  "Nicaragua", "LATIN AM. CARIBBEAN",
+  "Cuba", "LATIN AM. CARIBBEAN",
+  "Dominican Republic", "LATIN AM. CARIBBEAN",
+  "Haiti", "LATIN AM. CARIBBEAN",
+  "Jamaica", "LATIN AM. CARIBBEAN",
+  "Bahamas", "LATIN AM. CARIBBEAN",
+  "Barbados", "LATIN AM. CARIBBEAN",
+  "Trinidad and Tobago", "LATIN AM. CARIBBEAN",
+  "Saint Lucia", "LATIN AM. CARIBBEAN",
+  "Saint Vincent and the Grenadines", "LATIN AM. CARIBBEAN",
+  "Grenada", "LATIN AM. CARIBBEAN",
+  "Belize", "LATIN AM. CARIBBEAN",
+  "Guyana", "LATIN AM. CARIBBEAN",
+  "Suriname", "LATIN AM. CARIBBEAN",
+  "China", "ASIA",
+  "India", "ASIA",
+  "Indonesia", "ASIA",
+  "Pakistan", "ASIA",
+  "Bangladesh", "ASIA",
+  "Thailand", "ASIA",
+  "Viet Nam", "ASIA",
+  "Philippines", "ASIA",
+  "Republic of Korea", "ASIA",
+  "Dem. People's Republic of Korea", "ASIA",
+  "Japan", "ASIA",
+  "Iran (Islamic Republic of)", "ASIA",
+  "Iraq", "ASIA",
+  "Afghanistan", "ASIA",
+  "Nepal", "ASIA",
+  "Sri Lanka", "ASIA",
+  "Myanmar", "ASIA",
+  "Cambodia", "ASIA",
+  "Lao People's Democratic Republic", "ASIA",
+  "Timor-Leste", "ASIA",
+  "Uzbekistan", "ASIA",
+  "Kazakhstan", "ASIA",
+  "Kyrgyzstan", "ASIA",
+  "Tajikistan", "ASIA",
+  "Turkmenistan", "ASIA",
+  "Armenia", "ASIA",
+  "Azerbaijan", "ASIA",
+  "Georgia", "ASIA",
+  "Russian Federation", "EUROPE",
+  "Ukraine", "EUROPE",
+  "Poland", "EUROPE",
+  "Germany", "EUROPE",
+  "France", "EUROPE",
+  "United Kingdom", "EUROPE",
+  "Italy", "EUROPE",
+  "Spain", "EUROPE",
+  "Portugal", "EUROPE",
+  "Netherlands", "EUROPE",
+  "Belgium", "EUROPE",
+  "Sweden", "EUROPE",
+  "Norway", "EUROPE",
+  "Denmark", "EUROPE",
+  "Finland", "EUROPE",
+  "Austria", "EUROPE",
+  "Switzerland", "EUROPE",
+  "Ireland", "EUROPE",
+  "Greece", "EUROPE",
+  "Czech Republic", "EUROPE",
+  "Slovakia", "EUROPE",
+  "Hungary", "EUROPE",
+  "Romania", "EUROPE",
+  "Bulgaria", "EUROPE",
+  "Croatia", "EUROPE",
+  "Slovenia", "EUROPE",
+  "Serbia", "EUROPE",
+  "Montenegro", "EUROPE",
+  "TFYR Macedonia", "EUROPE",
+  "Republic of Moldova", "EUROPE",
+  "Bosnia and Herzegovina", "EUROPE",
+  "Albania", "EUROPE",
+  "Lithuania", "EUROPE",
+  "Latvia", "EUROPE",
+  "Estonia", "EUROPE",
+  "Malta", "EUROPE",
+  "Luxembourg", "EUROPE",
+  "Iceland", "EUROPE",
+  "Israel", "ASIA",
+  "Turkey", "EUROPE",
+  "Egypt", "AFRICA",
+  "South Africa", "AFRICA",
+  "Nigeria", "AFRICA",
+  "Kenya", "AFRICA",
+  "Ghana", "AFRICA",
+  "Ethiopia", "AFRICA",
+  "Uganda", "AFRICA",
+  "United Republic of Tanzania", "AFRICA",
+  "Sudan", "AFRICA",
+  "Democratic Republic of the Congo", "AFRICA",
+  "Cameroon", "AFRICA",
+  "Morocco", "AFRICA",
+  "Algeria", "AFRICA",
+  "Tunisia", "AFRICA",
+  "Libyan Arab Jamahiriya", "AFRICA",
+  "Somalia", "AFRICA",
+  "Senegal", "AFRICA",
+  "Mali", "AFRICA",
+  "Burkina Faso", "AFRICA",
+  "Niger", "AFRICA",
+  "Chad", "AFRICA",
+  "Benin", "AFRICA",
+  "Togo", "AFRICA",
+  "Guinea", "AFRICA",
+  "Guinea-Bissau", "AFRICA",
+  "Sierra Leone", "AFRICA",
+  "Liberia", "AFRICA",
+  "C\x99te d'Ivoire", "AFRICA",
+  "Central African Republic", "AFRICA",
+  "Republic of the Congo", "AFRICA",
+  "Gabon", "AFRICA",
+  "Equatorial Guinea", "AFRICA",
+  "Angola", "AFRICA",
+  "Mozambique", "AFRICA",
+  "Zambia", "AFRICA",
+  "Zimbabwe", "AFRICA",
+  "Malawi", "AFRICA",
+  "Madagascar", "AFRICA",
+  "Mauritania", "AFRICA",
+  "Mauritius", "AFRICA",
+  "Lesotho", "AFRICA",
+  "Botswana", "AFRICA",
+  "Cape Verde", "AFRICA",
+  "Comoros", "AFRICA",
+  "Sao Tome and Principe", "AFRICA",
+  "Rwanda", "AFRICA",
+  "Burundi", "AFRICA",
+  "Swaziland", "AFRICA",
+  "Oman", "ASIA",
+  "Qatar", "ASIA",
+  "Saudi Arabia", "ASIA",
+  "United Arab Emirates", "ASIA",
+  "Bahrain", "ASIA",
+  "Lebanon", "ASIA",
+  "Jordan", "ASIA",
+  "Yemen", "ASIA",
+  "Syrian Arab Republic", "ASIA",
+  "Singapore", "ASIA",
+  "Malaysia", "ASIA",
+  "Brunei Darussalam", "ASIA",
+  "Fiji", "OCEANIA",
+  "Papua New Guinea", "OCEANIA",
+  "Solomon Islands", "OCEANIA",
+  "Vanuatu", "OCEANIA",
+  "Samoa", "OCEANIA",
+  "Tonga", "OCEANIA",
+  "Micronesia (Fed. States of)", "OCEANIA",
+  "New Zealand", "OCEANIA",
+  "Australia", "OCEANIA",
+  "Maldives", "ASIA",
+  "Bhutan", "ASIA",
+  "Aruba", "LATIN AM. CARIBBEAN",
+  "Guadeloupe", "LATIN AM. CARIBBEAN",
+  "Martinique", "LATIN AM. CARIBBEAN",
+  "Netherlands Antilles", "LATIN AM. CARIBBEAN",
+  "Puerto Rico", "LATIN AM. CARIBBEAN",
+  "United States Virgin Islands", "LATIN AM. CARIBBEAN",
+  "New Caledonia", "OCEANIA",
+  "Guam", "OCEANIA",
+  "French Polynesia", "OCEANIA",
+  "Occupied Palestinian Territory", "ASIA",
+  "China, Hong Kong SAR", "ASIA",
+  "China, Macao SAR", "ASIA",
+  "Mayotte", "AFRICA",
+  "R\x8eunion", "AFRICA",
+  "Western Sahara", "AFRICA",
+  "Channel Islands", "EUROPE",
+  "Montenergro", "EUROPE",
+  "French Guiana", "LATIN AM. CARIBBEAN",
+  "Namibia", "AFRICA",
+  "Belarus", "EUROPE",
+  "Congo", "AFRICA",
+  "Cyprus", "EUROPE",
+  "Djibouti", "AFRICA",
+  "Eritrea", "AFRICA",
+  "Gambia", "AFRICA",
+  "Kuwait", "AFRICA",
+  "Mongolia","ASIA",
+  "American Samoa", "OCEANIA",
+  "Andorra", "EUROPE",
+  "Antigua and Barbuda", "LATIN AM. CARIBBEAN",
+  "Bermuda","NORTHERN AM.",
+  "Cook Islands","OCEANIA",
+  "Dominica", "LATIN AM. CARIBBEAN",
+  "Greenland", "EUROPE",
+  "Kiribati", "OCEANIA",
+  "Marshall Islands", "OCEANIA",
+  "Nauru", "OCEANIA",
+  "Niue", "OCEANIA",
+  "State of Palestine", "ASIA",
+  "Palau", "OCEANIA",
+  "Saint Kitts and Nevis", "LATIN AM. CARIBBEAN",
+  "Seychelles", "AFRICA",
+  "South Sudan", "AFRICA",
+  "Taiwan", "ASIA",
+  "Tokelau", "OCEANIA",
+  "Tuvalu","OCEANIA")
+
+BMIdf_UNregions_continent<-BMIdf_UNregions %>% left_join(region_map,by=c("name"="country")) 
+
+BMIdf_UNregions_continent %>% distinct(region.y)
+
+
+DF_2022<-read.csv("~/OneDrive/Documents/UAH/Weightofnations/Code/Draft code Sep2025/Output/df_bmipopheight_2022_18plus.csv")
+
+BMIdf_UNregions_continent
+DF_2022
+
+BMIDF_2022<-BMIdf_UNregions_continent %>% filter(!is.na(`Prevalence of BMI 18.5 kg/m² to <20 kg/m²`)) %>% mutate(SEX=if_else(Sex=="Women",0,1)) %>%
+  rename(prev_less18.5 = `Prevalence of BMI<18.5 kg/m² (underweight)`,
+         prev_18.5to20 = `Prevalence of BMI 18.5 kg/m² to <20 kg/m²`,
+         prev_20to25 = `Prevalence of BMI 20 kg/m² to <25 kg/m²`,
+         prev_25to30 = `Prevalence of BMI 25 kg/m² to <30 kg/m²`,
+         prev_30to35 = `Prevalence of BMI 30 kg/m² to <35 kg/m²`,
+         prev_35to40 = `Prevalence of BMI 35 kg/m² to <40 kg/m²`,
+         prev_over40 = `Prevalence of BMI >=40 kg/m² (morbid obesity)`, 
+         heightagegroups = `Age group`) %>%
+  dplyr::select(name,SEX, heightagegroups, region.y, prev_less18.5, prev_18.5to20, prev_20to25, prev_25to30, prev_30to35, prev_35to40, prev_over40)
+
+saveRDS(BMIDF_2022, "Output/Jan21/BMIDF_2022.rds")
+```
+
